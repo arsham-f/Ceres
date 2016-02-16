@@ -2,6 +2,6 @@ package ceres
 
 
 type Entry struct {
-	time int
-	data string
+	Time 	int		`json:"time"`
+	Data 	string	`json:"data"`
 }

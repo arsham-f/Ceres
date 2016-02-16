@@ -3,33 +3,35 @@ package ceres
 
 import (
 	"github.com/mediocregopher/radix.v2/redis"
+	"errors"
+	"time"
 )
 
 type Bucket struct {
 	client 	*redis.Client
-	name	string
+	Name	string
 	length	int
 }
 
 func (b *Bucket) bucketName() string {
-	return "bucket_" + b.name
+	return "bucket_" + b.Name
 }
 
 func (b *Bucket) Add(time int, data string) error {
 	return b.client.Cmd("ZADD", b.bucketName(), time, data).Err
 }
 
-func (b *Bucket) Get() []Entry {
+func (b *Bucket) Get() ([]Entry, error) {
 	var r []Entry
 
 	resp := b.client.Cmd("ZRANGE", b.bucketName(), "0", "-1", "WITHSCORES")
 
 	if resp.Err != nil {
-		return nil
+		return nil, resp.Err
 	}
 
 	if resp.IsType(redis.Nil) {
-		return nil
+		return []Entry{}, nil
 	}
 
 	result, _ := resp.Array()
@@ -43,11 +45,35 @@ func (b *Bucket) Get() []Entry {
 		})
 	}
 
-	return r
+	return r, nil
+}
+
+func (b *Bucket) Purge() error {
+	if b.length == 0 {
+		return nil
+	}
+	
+	threshold := time.Now().UTC().Unix() - int64(b.length)
+	return b.client.Cmd("ZREMRANGEBYSCORE", b.bucketName(), "-inf", threshold).Err
+}
+
+func (b *Bucket) Delete() error {
+	return b.client.Cmd("DEL", b.Name, b.bucketName()).Err
 }
 
 func CreateBucket(client *redis.Client, name string, length int) error {
-	return client.Cmd("SET", name, length, "NX").Err
+	exists, err := client.Cmd("EXISTS", name).Int()
+
+
+	if err != nil {
+		return err
+	}
+
+	if exists == 1 {
+		return errors.New("Bucket already exists")
+	} else {
+		return client.Cmd("SET", name, length, "NX").Err
+	}
 }
 
 func GetBucket(client *redis.Client, name string) (*Bucket, error) {
@@ -64,4 +90,32 @@ func GetBucket(client *redis.Client, name string) (*Bucket, error) {
 	}
 
 	return b, nil
+}
+
+func AllBuckets(client *redis.Client) ([]*Bucket, error) {
+	var ret []*Bucket
+
+	keys, err := client.Cmd("KEYS", "*").Array()
+
+	if err != nil {
+		return nil, err
+	}
+
+	for _, key := range keys {
+		keyval, err := key.Str()
+
+		if err != nil {
+			continue
+		}
+
+		b, err := GetBucket(client, keyval)
+
+		if err != nil {
+			continue
+		}
+
+		ret = append(ret, b)
+	}
+
+	return ret, nil
 }
